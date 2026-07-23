@@ -16,6 +16,7 @@ bool PMSA003ISensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
     LOG_INFO("Init sensor: %s", sensorName);
 #ifdef PMSA003I_ENABLE_PIN
     pinMode(PMSA003I_ENABLE_PIN, OUTPUT);
+    digitalWrite(PMSA003I_ENABLE_PIN, HIGH);
 #endif
 
     _bus = bus;
@@ -161,7 +162,6 @@ int32_t PMSA003ISensor::wakeUpTimeMs()
 int32_t PMSA003ISensor::pendingForReadyMs()
 {
 #ifdef PMSA003I_ENABLE_PIN
-
     uint32_t now;
     now = getTime();
     uint32_t sincePmMeasureStarted = (now - pmMeasureStarted) * 1000;
@@ -172,7 +172,6 @@ int32_t PMSA003ISensor::pendingForReadyMs()
         return PMSA003I_WARMUP_MS - sincePmMeasureStarted;
     }
     return 0;
-
 #endif
     return 0;
 }
@@ -188,6 +187,7 @@ bool PMSA003ISensor::canSleep()
 void PMSA003ISensor::sleep()
 {
 #ifdef PMSA003I_ENABLE_PIN
+    LOG_INFO("%s: Sleep", sensorName);
     digitalWrite(PMSA003I_ENABLE_PIN, LOW);
     state = State::IDLE;
     pmMeasureStarted = 0;
