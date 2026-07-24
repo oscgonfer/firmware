@@ -114,6 +114,22 @@ int32_t AirQualityTelemetryModule::runOnce()
         uint32_t lastTelemetry =
             transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_AIR_QUALITY_TELEMETRY) : 0;
         for (TelemetrySensor *sensor : sensors) {
+            LOG_DEBUG("Checking if %s needs to wake up", sensor->sensorName);
+            LOG_DEBUG("LastTelemetry: %u", lastTelemetry);
+            LOG_DEBUG("sensor->wakeUpTimeMs(): %i ", sensor->wakeUpTimeMs());
+
+            if (sensor->canSleep()) {
+                LOG_DEBUG("%s can sleep", sensor->sensorName);
+            } else {
+                LOG_DEBUG("%s can't sleep", sensor->sensorName);
+            }
+
+            if (sensor->isActive()) {
+                LOG_DEBUG("%s is active", sensor->sensorName);
+            } else {
+                LOG_DEBUG("%s is not active", sensor->sensorName);
+            }
+
             if (!sensor->canSleep()) {
                 LOG_DEBUG("%s sensor doesn't have sleep feature. Skipping", sensor->sensorName);
             } else if (((lastTelemetry == 0) ||
