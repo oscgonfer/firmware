@@ -109,62 +109,65 @@ int32_t AirQualityTelemetryModule::runOnce()
             return disable();
         }
 
-        // Wake up the sensors that need it
-        LOG_INFO("Waking up sensors...");
+        uint32_t telemetryIntervalMs = Default::getConfiguredOrDefaultMsScaled(
+            moduleConfig.telemetry.air_quality_interval, default_telemetry_broadcast_interval_secs, numOnlineNodes);
+
         uint32_t lastTelemetry =
             transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_AIR_QUALITY_TELEMETRY) : 0;
+
+        bool telemetryAllowed =
+            airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
+            airTime->isTxAllowedAirUtil();
+
+        bool phoneAllowed = service->isToPhoneQueueEmpty();
+
+        // Wake up the sensor in either one of these conditions:
+        // - We can publish the data on the mesh shortly
+        // - Or we can send it to the phone
+        // TODO: This will need to be refurbished once we implement separate intervals
+        LOG_INFO("Waking up sensors...");
         for (TelemetrySensor *sensor : sensors) {
-            LOG_DEBUG("Checking if %s needs to wake up", sensor->sensorName);
-            LOG_DEBUG("LastTelemetry: %u", lastTelemetry);
-            LOG_DEBUG("sensor->wakeUpTimeMs(): %i ", sensor->wakeUpTimeMs());
-
-            if (sensor->canSleep()) {
-                LOG_DEBUG("%s can sleep", sensor->sensorName);
-            } else {
-                LOG_DEBUG("%s can't sleep", sensor->sensorName);
-            }
-
-            if (sensor->isActive()) {
-                LOG_DEBUG("%s is active", sensor->sensorName);
-            } else {
-                LOG_DEBUG("%s is not active", sensor->sensorName);
-            }
-
             if (!sensor->canSleep()) {
                 LOG_DEBUG("%s sensor doesn't have sleep feature. Skipping", sensor->sensorName);
-            } else if (((lastTelemetry == 0) ||
-                        !Throttle::isWithinTimespanMs(lastTelemetry - sensor->wakeUpTimeMs(),
-                                                      Default::getConfiguredOrDefaultMsScaled(
-                                                          moduleConfig.telemetry.air_quality_interval,
-                                                          default_telemetry_broadcast_interval_secs, numOnlineNodes))) &&
-                       airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
-                       airTime->isTxAllowedAirUtil()) {
-                if (!sensor->isActive()) {
-                    LOG_DEBUG("Waking up: %s", sensor->sensorName);
-                    return sensor->wakeUp();
-                } else {
-                    int32_t pendingForReadyMs = sensor->pendingForReadyMs();
-                    LOG_DEBUG("%s. Pending for ready %ums", sensor->sensorName, pendingForReadyMs);
-                    if (pendingForReadyMs) {
-                        return pendingForReadyMs;
-                    }
-                }
+                continue;
+            }
+
+            bool telemetryDue = (lastTelemetry == 0) ||
+                                !Throttle::isWithinTimespanMs(lastTelemetry - sensor->wakeUpTimeMs(), telemetryIntervalMs);
+
+            bool phoneDue = (lastSentToPhone == 0) ||
+                            !Throttle::isWithinTimespanMs(lastSentToPhone - sensor->wakeUpTimeMs(), sendToPhoneIntervalMs);
+
+            bool shouldWake = (telemetryDue && telemetryAllowed) || (phoneDue && phoneAllowed);
+
+            if (!shouldWake) {
+                continue;
+            }
+
+            if (!sensor->isActive()) {
+                LOG_DEBUG("Waking up: %s", sensor->sensorName);
+                return sensor->wakeUp();
+            }
+
+            int32_t pending = sensor->pendingForReadyMs();
+            if (pending) {
+                LOG_DEBUG("%s pending %ums", sensor->sensorName, pending);
+                return pending;
             }
         }
 
-        if (((lastTelemetry == 0) ||
-             !Throttle::isWithinTimespanMs(lastTelemetry, Default::getConfiguredOrDefaultMsScaled(
-                                                              moduleConfig.telemetry.air_quality_interval,
-                                                              default_telemetry_broadcast_interval_secs, numOnlineNodes))) &&
-            airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
-            airTime->isTxAllowedAirUtil()) {
+        bool telemetryDue = (lastTelemetry == 0) || !Throttle::isWithinTimespanMs(lastTelemetry, telemetryIntervalMs);
+
+        bool phoneDue = (lastSentToPhone == 0) || !Throttle::isWithinTimespanMs(lastSentToPhone, sendToPhoneIntervalMs);
+
+        if (telemetryDue && telemetryAllowed) {
             sendTelemetry();
-            if (transmitHistory)
+
+            if (transmitHistory) {
                 transmitHistory->setLastSentToMesh(TX_HISTORY_KEY_AIR_QUALITY_TELEMETRY);
-        } else if (((lastSentToPhone == 0) || !Throttle::isWithinTimespanMs(lastSentToPhone, sendToPhoneIntervalMs)) &&
-                   (service->isToPhoneQueueEmpty())) {
-            // Just send to phone when it's not our time to send to mesh yet
-            // Only send while queue is empty (phone assumed connected)
+            }
+        } else if (phoneDue && phoneAllowed) {
+            // Mesh transmission isn't due yet, but we can still update the phone.
             sendTelemetry(NODENUM_BROADCAST, true);
             lastSentToPhone = millis();
         }
@@ -173,9 +176,7 @@ int32_t AirQualityTelemetryModule::runOnce()
         LOG_DEBUG("Sending sensors to sleep");
         for (TelemetrySensor *sensor : sensors) {
             if (sensor->isActive() && sensor->canSleep()) {
-                if (sensor->wakeUpTimeMs() <
-                    (int32_t)Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.air_quality_interval,
-                                                                     default_telemetry_broadcast_interval_secs, numOnlineNodes)) {
+                if (sensor->wakeUpTimeMs() < (int32_t)telemetryIntervalMs) {
                     LOG_DEBUG("Disabling %s until next period", sensor->sensorName);
                     sensor->sleep();
                 } else {
