@@ -23,11 +23,26 @@ bool PMSA003ISensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
     _bus = bus;
     _address = dev->address.address;
 
+#ifdef PMSA003I_I2C_CLOCK_SPEED
+#ifdef CAN_RECLOCK_I2C
+    uint32_t currentClock = reClockI2C(PMSA003I_I2C_CLOCK_SPEED, _bus, false);
+#elif !HAS_SCREEN
+    reClockI2C(PMSA003I_I2C_CLOCK_SPEED, _bus, true);
+#else
+    LOG_WARN("%s can't be used at this clock speed, with a screen", sensorName);
+    return false;
+#endif /* CAN_RECLOCK_I2C */
+#endif /* PMSA003I_I2C_CLOCK_SPEED */
+
     _bus->beginTransmission(_address);
     if (_bus->endTransmission() != 0) {
         LOG_WARN("%s not found on I2C at 0x12", sensorName);
         return false;
     }
+
+#if defined(PMSA003I_I2C_CLOCK_SPEED) && defined(CAN_RECLOCK_I2C)
+    reClockI2C(currentClock, _bus, false);
+#endif
 
     status = 1;
     LOG_INFO("%s: Enabled", sensorName);
@@ -44,6 +59,17 @@ bool PMSA003ISensor::getMetrics(meshtastic_Telemetry *measurement)
         return false;
     }
 
+#ifdef PMSA003I_I2C_CLOCK_SPEED
+#ifdef CAN_RECLOCK_I2C
+    uint32_t currentClock = reClockI2C(PMSA003I_I2C_CLOCK_SPEED, _bus, false);
+#elif !HAS_SCREEN
+    reClockI2C(PMSA003I_I2C_CLOCK_SPEED, _bus, true);
+#else
+    LOG_WARN("%s can't be used at this clock speed, with a screen", sensorName);
+    return false;
+#endif /* CAN_RECLOCK_I2C */
+#endif /* PMSA003I_I2C_CLOCK_SPEED */
+
     _bus->requestFrom(_address, (uint8_t)PMSA003I_FRAME_LENGTH);
     if (_bus->available() < PMSA003I_FRAME_LENGTH) {
         LOG_WARN("%s read failed: incomplete data (%d bytes)", sensorName, _bus->available());
@@ -53,6 +79,10 @@ bool PMSA003ISensor::getMetrics(meshtastic_Telemetry *measurement)
     for (uint8_t i = 0; i < PMSA003I_FRAME_LENGTH; i++) {
         buffer[i] = _bus->read();
     }
+
+#if defined(PMSA003I_I2C_CLOCK_SPEED) && defined(CAN_RECLOCK_I2C)
+    reClockI2C(currentClock, _bus, false);
+#endif
 
     if (buffer[0] != 0x42 || buffer[1] != 0x4D) {
         LOG_WARN("%s frame header invalid: 0x%02X 0x%02X", sensorName, buffer[0], buffer[1]);
